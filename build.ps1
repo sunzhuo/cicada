@@ -1,5 +1,6 @@
 param(
-    [switch]$Debug
+    [switch]$Debug,
+    [switch]$Deploy
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,3 +38,9 @@ if (Test-Path "logo.png") {
 }
 
 Write-Host "==> Ready for Cloudflare Pages! Both root and dist/ contain index.html and cicada.exe." -ForegroundColor Green
+
+if ($Deploy) {
+    Write-Host "==> Deploying to Cloudflare Pages (cicada)..." -ForegroundColor Cyan
+    npx wrangler pages deploy dist --project-name cicada --commit-dirty=true
+}
+
