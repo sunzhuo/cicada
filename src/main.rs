@@ -239,12 +239,20 @@ fn find_local_file(filename: &str) -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
+        let p_dist = cwd.join("dist").join(filename);
+        if p_dist.is_file() {
+            return Some(p_dist);
+        }
     }
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
             let p = parent.join(filename);
             if p.is_file() {
                 return Some(p);
+            }
+            let p_dist = parent.join("dist").join(filename);
+            if p_dist.is_file() {
+                return Some(p_dist);
             }
         }
     }
@@ -342,10 +350,19 @@ fn run_http_server(addr: &str, proxy: EventLoopProxy<UserEvent>) {
         }
 
         if path == "/favicon.ico" {
-            if let Some(ico_path) = find_local_file("app.ico").or_else(|| find_local_file("favicon.ico")) {
+            if let Some(ico_path) = find_local_file("logo.png")
+                .or_else(|| find_local_file("favicon.ico"))
+                .or_else(|| find_local_file("app.ico"))
+                .or_else(|| find_local_file("icon.png"))
+            {
                 if let Ok(file) = File::open(&ico_path) {
                     let mut res = Response::from_file(file);
-                    res.add_header(hdr("Content-Type", "image/x-icon"));
+                    let ct = if ico_path.extension().and_then(|e| e.to_str()) == Some("png") {
+                        "image/png"
+                    } else {
+                        "image/x-icon"
+                    };
+                    res.add_header(hdr("Content-Type", ct));
                     let _ = req.respond(with_cors(res));
                     continue;
                 }
@@ -355,10 +372,19 @@ fn run_http_server(addr: &str, proxy: EventLoopProxy<UserEvent>) {
         }
 
         if path == "/logo.png" || path == "/icon.png" {
-            if let Some(img_path) = find_local_file("logo.png").or_else(|| find_local_file("icon.png")) {
+            if let Some(img_path) = find_local_file("logo.png")
+                .or_else(|| find_local_file("icon.png"))
+                .or_else(|| find_local_file("favicon.ico"))
+                .or_else(|| find_local_file("app.ico"))
+            {
                 if let Ok(file) = File::open(&img_path) {
                     let mut res = Response::from_file(file);
-                    res.add_header(hdr("Content-Type", "image/png"));
+                    let ct = if img_path.extension().and_then(|e| e.to_str()) == Some("ico") {
+                        "image/x-icon"
+                    } else {
+                        "image/png"
+                    };
+                    res.add_header(hdr("Content-Type", ct));
                     let _ = req.respond(with_cors(res));
                     continue;
                 }

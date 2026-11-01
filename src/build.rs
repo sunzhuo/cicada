@@ -15,7 +15,12 @@ fn main() {
     const GRAY: (u8, u8, u8) = (145, 150, 160);
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let icon_png_path = Path::new(&manifest_dir).join("icon.png");
+    let icon_png_path = Path::new(&manifest_dir).join("dist").join("logo.png");
+    let icon_png_path = if icon_png_path.is_file() {
+        icon_png_path
+    } else {
+        Path::new(&manifest_dir).join("icon.png")
+    };
 
     let alpha_mask = load_icon_alpha_mask(&icon_png_path);
 
