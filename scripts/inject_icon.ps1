@@ -1,5 +1,5 @@
 param(
-    [string]$ExePath = "target\release\zero-daemon.exe",
+    [string]$ExePath = "target\release\cicada.exe",
     [string]$IcoPath = "app.ico"
 )
 

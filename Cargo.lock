@@ -133,6 +133,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
+name = "cicada"
+version = "0.2.0"
+dependencies = [
+ "muda",
+ "parking_lot_core",
+ "png",
+ "serde_json",
+ "tao",
+ "tiny_http",
+ "tray-icon",
+ "winres",
+]
+
+[[package]]
 name = "cocoa"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2299,20 +2313,6 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "synstructure",
-]
-
-[[package]]
-name = "zero-daemon"
-version = "0.2.0"
-dependencies = [
- "muda",
- "parking_lot_core",
- "png",
- "serde_json",
- "tao",
- "tiny_http",
- "tray-icon",
- "winres",
 ]
 
 [[package]]

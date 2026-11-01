@@ -11,7 +11,7 @@ use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -54,18 +54,25 @@ fn main() {
         let _ = fs::remove_file(exe.with_extension("old"));
     }
 
-    let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8080".into());
-    let token = env::var("DAEMON_TOKEN").unwrap_or_else(|_| gen_token());
+    // 2. Windows 下自动注册 cicada:// 自定义 URL 协议，支持网页一键唤醒
+    #[cfg(target_os = "windows")]
+    register_custom_protocol();
+
+    // 3. 解析命令行参数：如果由 cicada:// 协议唤醒，忽略协议 URL，默认绑定 127.0.0.1:4140
+    let mut addr = "127.0.0.1:4140".to_string();
+    for arg in env::args().skip(1) {
+        if arg.starts_with("cicada://") {
+            continue;
+        }
+        if arg.contains(':') && !arg.contains("://") {
+            addr = arg;
+        }
+    }
 
     let ui_base = env::var("WEB_UI_URL").unwrap_or_else(|_| format!("http://{}", addr));
-    let launch_url = format!(
-        "{}/#host=http://{}&token={}",
-        ui_base.trim_end_matches('/'),
-        addr,
-        token
-    );
+    let launch_url = format!("{}/", ui_base.trim_end_matches('/'));
 
-    // 2. 构建主线程原生事件循环 (接管系统托盘与菜单)
+    // 4. 构建主线程原生事件循环 (接管系统托盘与菜单)
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -77,7 +84,7 @@ fn main() {
     let tray_icon_res = TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("Zero-Daemon: AI Proxy Controller")
+        .with_tooltip("Cicada: AI Proxy Controller")
         .with_icon(get_blue_icon())
         .build();
 
@@ -89,12 +96,21 @@ fn main() {
         }
     };
 
-    // 3. 在后台线程启动 tiny_http 服务
+    // 若托盘图标创建失败(如无头环境/会话0)，创建隐藏窗口以维持事件循环不退出
+    let _dummy_window = if tray_icon.is_none() {
+        tao::window::WindowBuilder::new()
+            .with_visible(false)
+            .build(&event_loop)
+            .ok()
+    } else {
+        None
+    };
+
+    // 5. 在后台线程启动 tiny_http 服务 (通讯无需 token)
     let http_addr = addr.clone();
-    let http_token = token.clone();
     let http_proxy = proxy.clone();
     thread::spawn(move || {
-        run_http_server(&http_addr, &http_token, http_proxy);
+        run_http_server(&http_addr, http_proxy);
     });
 
     let tray_event_receiver = TrayIconEvent::receiver();
@@ -184,8 +200,8 @@ fn build_native_menu(
         let _ = menu.append(&PredefinedMenuItem::separator());
     }
 
-    let open_item = MenuItem::with_id("__open_web__", "🌐 打开 AI 控制台", true, None);
-    let exit_item = MenuItem::with_id("__exit_app__", "❌ 退出守护进程", true, None);
+    let open_item = MenuItem::with_id("__open_web__", "🌐 打开 Cicada 控制台", true, None);
+    let exit_item = MenuItem::with_id("__exit_app__", "❌ 退出 Cicada", true, None);
     let _ = menu.append(&open_item);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&exit_item);
@@ -217,7 +233,49 @@ fn open_browser(url: &str) {
 // 后台 HTTP 服务线程 (包含 /fs, /exec, /tray, /exit 四个接口)
 // ============================================================================
 
-fn run_http_server(addr: &str, token: &str, proxy: EventLoopProxy<UserEvent>) {
+fn find_local_file(filename: &str) -> Option<PathBuf> {
+    if let Ok(cwd) = env::current_dir() {
+        let p = cwd.join(filename);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join(filename);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn register_custom_protocol() {
+    if let Ok(exe_path) = env::current_exe() {
+        let exe_str = exe_path.to_string_lossy().to_string();
+        let cmd_str = format!("\"{}\" \"%1\"", exe_str);
+        use std::os::windows::process::CommandExt;
+
+        let reg_add = |args: &[&str]| {
+            let _ = Command::new("reg")
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x08000000)
+                .status();
+        };
+
+        reg_add(&["add", "HKCU\\Software\\Classes\\cicada", "/ve", "/d", "URL:Cicada Protocol", "/f"]);
+        reg_add(&["add", "HKCU\\Software\\Classes\\cicada", "/v", "URL Protocol", "/d", "", "/f"]);
+        reg_add(&["add", "HKCU\\Software\\Classes\\cicada\\DefaultIcon", "/ve", "/d", &format!("\"{}\",0", exe_str), "/f"]);
+        reg_add(&["add", "HKCU\\Software\\Classes\\cicada\\shell\\open\\command", "/ve", "/d", &cmd_str, "/f"]);
+    }
+}
+
+fn run_http_server(addr: &str, proxy: EventLoopProxy<UserEvent>) {
     let mut server = None;
     for _ in 0..20 {
         if let Ok(s) = Server::http(addr) {
@@ -226,12 +284,17 @@ fn run_http_server(addr: &str, token: &str, proxy: EventLoopProxy<UserEvent>) {
         }
         thread::sleep(Duration::from_millis(100));
     }
-    let server = server.expect("Failed to bind HTTP port");
+    let server = match server {
+        Some(s) => s,
+        None => {
+            eprintln!("Cicada instance already running or failed to bind {}", addr);
+            std::process::exit(0);
+        }
+    };
 
     println!("======================================================");
-    println!("Zero-Daemon listening on: http://{}", addr);
-    println!("Bearer Token:             {}", token);
-    println!("Connect URL:              http://{}/#token={}", addr, token);
+    println!("Cicada listening on: http://{}", addr);
+    println!("Web UI / Studio:     http://{}/", addr);
     println!("======================================================");
 
     for mut req in server.incoming_requests() {
@@ -243,16 +306,68 @@ fn run_http_server(addr: &str, token: &str, proxy: EventLoopProxy<UserEvent>) {
         let raw_url = req.url().to_string();
         let (path, query) = raw_url.split_once('?').unwrap_or((&raw_url, ""));
 
-        if path == "/" || path == "/ping" {
-            let _ = reply_json(req, 200, json!({ "status": "ok", "name": "zero-daemon", "version": "0.2.0" }));
+        if path == "/ping" {
+            let _ = reply_json(req, 200, json!({ "status": "ok", "name": "cicada", "version": "0.2.0" }));
             continue;
         }
 
-        if !check_auth(&req, query, token) {
-            let _ = reply_json(req, 401, json!({ "error": "Unauthorized" }));
+        if path == "/cicada.exe" || path == "/zero-daemon.exe" {
+            if let Some(exe_path) = find_local_file("cicada.exe")
+                .or_else(|| find_local_file("zero-daemon.exe"))
+                .or_else(|| env::current_exe().ok())
+            {
+                if let Ok(file) = File::open(&exe_path) {
+                    let mut res = Response::from_file(file);
+                    res.add_header(hdr("Content-Type", "application/octet-stream"));
+                    res.add_header(hdr("Content-Disposition", "attachment; filename=\"cicada.exe\""));
+                    let _ = req.respond(with_cors(res));
+                    continue;
+                }
+            }
+            let _ = req.respond(with_cors(Response::empty(404)));
             continue;
         }
 
+        if path == "/" || path == "/ui" || path == "/index.html" {
+            if let Some(index_path) = find_local_file("index.html") {
+                if let Ok(file) = File::open(&index_path) {
+                    let mut res = Response::from_file(file);
+                    res.add_header(hdr("Content-Type", "text/html; charset=utf-8"));
+                    let _ = req.respond(with_cors(res));
+                    continue;
+                }
+            }
+            let _ = reply_json(req, 200, json!({ "status": "ok", "name": "cicada", "version": "0.2.0" }));
+            continue;
+        }
+
+        if path == "/favicon.ico" {
+            if let Some(ico_path) = find_local_file("app.ico").or_else(|| find_local_file("favicon.ico")) {
+                if let Ok(file) = File::open(&ico_path) {
+                    let mut res = Response::from_file(file);
+                    res.add_header(hdr("Content-Type", "image/x-icon"));
+                    let _ = req.respond(with_cors(res));
+                    continue;
+                }
+            }
+            let _ = req.respond(with_cors(Response::empty(404)));
+            continue;
+        }
+
+        if path == "/logo.png" || path == "/icon.png" {
+            if let Some(img_path) = find_local_file("logo.png").or_else(|| find_local_file("icon.png")) {
+                if let Ok(file) = File::open(&img_path) {
+                    let mut res = Response::from_file(file);
+                    res.add_header(hdr("Content-Type", "image/png"));
+                    let _ = req.respond(with_cors(res));
+                    continue;
+                }
+            }
+            let _ = req.respond(with_cors(Response::empty(404)));
+            continue;
+        }
+
+        // 守护端与网页之间通讯无需 token，所有本地 API 请求直接通过
         let method = req.method().clone();
         let result = match (&method, path) {
             (Method::Get, "/api/v1/fs") => handle_fs_get(query),
@@ -591,16 +706,7 @@ fn get_query_param(query: &str, key: &str) -> Option<String> {
     None
 }
 
-fn check_auth(req: &Request, query: &str, expected_token: &str) -> bool {
-    let expected_header = format!("Bearer {}", expected_token);
-    let has_auth_header = req.headers().iter().any(|h| {
-        h.field.equiv("Authorization") && h.value.as_str().trim() == expected_header
-    });
-    if has_auth_header {
-        return true;
-    }
-    get_query_param(query, "token").as_deref() == Some(expected_token)
-}
+
 
 fn hdr(name: &'static str, val: &'static str) -> Header {
     Header::from_bytes(name.as_bytes(), val.as_bytes()).unwrap()
@@ -622,7 +728,4 @@ fn reply_json(req: Request, status: u16, body: Value) -> std::io::Result<()> {
     req.respond(with_cors(res))
 }
 
-fn gen_token() -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("{:x}{:x}", nanos, std::process::id())
-}
+
